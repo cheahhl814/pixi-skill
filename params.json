@@ -1,0 +1,35 @@
+{
+  "skill_name": "pixi-skill",
+  "skill_version": "5",
+  "skill_updated": "2026-09-16",
+  "skill_short_description": "Manage project-specific, reproducible bioinformatics environments using pixi. This skill ensures that all tools (from Conda, Bioconda, and PyPI) are locked to specific versions, enabling one-click reproducibility across different machines and AI agents.",
+  "skill_description": "Manage project-specific, reproducible bioinformatics environments using pixi. This skill ensures that all tools (from Conda, Bioconda, and PyPI) are locked to specific versions, enabling one-click reproducibility across different machines and AI agents.",
+  "skill_triggers": [
+    "set up environment",
+    "pixi install",
+    "conda environment",
+    "manage dependencies",
+    "pixi env",
+    "reproducible environment",
+    "bioconda environment",
+    "install bioinformatics tools",
+    "pixi add",
+    "environment lockfile",
+    "project dependencies",
+    "pixi run"
+  ],
+  "github_repo": "github.com/cheahhl814/pixi-skill",
+  "skill_title": "pixi-skill",
+  "github_org": "cheahhl814",
+  "pixi_channels": [
+    "conda-forge",
+    "bioconda"
+  ],
+  "license": "MIT",
+  "target_tiers": [
+    "large"
+  ],
+  "with_nextflow_runner": false,
+  "tool_inventory": [],
+  "sub_skills": []
+}
