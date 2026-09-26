@@ -1,8 +1,8 @@
 ---
 name: pixi-skill
 description: Manage project-specific, reproducible bioinformatics environments using pixi. This skill ensures that all tools (from Conda, Bioconda, and PyPI) are locked to specific versions, enabling one-click reproducibility across different machines and AI agents.
-version: 5
-updated: "2026-09-16"
+version: 6
+updated: "2026-09-26"
 triggers:
   - "set up environment"
   - "pixi install"
@@ -16,6 +16,8 @@ triggers:
   - "environment lockfile"
   - "project dependencies"
   - "pixi run"
+  - "dependency conflict"
+  - "pixi feature environment"
 ---
 
 # Skill: pixi-skill
@@ -96,7 +98,55 @@ pixi task add align "bwa mem ref.fa results/R1_trim.fq.gz results/R2_trim.fq.gz 
 pixi run align   # runs trim first, then align
 ```
 
-### 4. One-Off Scripts with PEP 723 (pixi >= 0.76)
+### 4. Multiple Environments for Clashing Tools
+
+When two tools can't share one solve (different Python pins, `setuptools<81` for CheckM, an old tool pinning an ancient `libgcc`), don't create a second project or a `pixi.toml` per tool/sub-pipeline. Keep **one manifest and one lockfile**, and move only the clashing tool into a **feature** with its own **environment**:
+
+```bash
+# 1. Everything that co-solves stays in the default feature
+pixi add python=3.9 seqkit samtools
+
+# 2. The clashing tool (plus its fix-ups) goes into a named feature
+pixi add --feature checkm checkm-genome "setuptools<81"
+
+# 3. Give that feature its own environment, WITHOUT the default deps (that's what avoids the clash)
+pixi workspace environment add checkm --feature checkm --no-default-feature
+
+# 4. Tasks can belong to the feature too
+pixi task add --feature checkm checkm-qc "checkm lineage_wf bins/ checkm_out/"
+
+pixi lock                              # solves default AND checkm into the one pixi.lock
+pixi run -e checkm checkm-qc           # run in the isolated env
+pixi run -e checkm python -V           # ad-hoc command in that env
+```
+
+Resulting manifest:
+
+```toml
+[dependencies]
+python = "3.9.*"
+seqkit = ">=2.14.0,<3"
+
+[feature.checkm.dependencies]
+checkm-genome = "*"
+setuptools = "<81"
+
+[feature.checkm.tasks]
+checkm-qc = "checkm lineage_wf bins/ checkm_out/"
+
+[environments]
+checkm = { features = ["checkm"], no-default-feature = true }
+```
+
+- **Split only on a real clash.** Try the normal `pixi add` first. Isolate a tool only when the solve fails, because each extra environment costs a full solve (the files themselves are hard-linked from the shared cache).
+- **Always pass `-e <env>` from agents.** Pixi picks the environment for a task when only one environment has it, but when the task is ambiguous it opens an interactive picker, which blocks a captured shell.
+- **`--no-default-feature` is the point.** Without it the environment inherits `[dependencies]`, and you get the same clash again.
+- A spec added with `--feature` before its environment exists is saved as `"*"`. It's still pinned in `pixi.lock`. Run `pixi upgrade --feature <name>` if you want a range written into `pixi.toml`.
+- Opposite case: to keep several environments on **identical** versions of shared deps (e.g. `default` + `test`), give them the same `solve-group`. Never use `solve-group` for a clashing tool, since it forces a joint solve, which is exactly what fails.
+
+Deeper reference: `docs-corpus/pixi/features/tutorials_multi_environment.md`.
+
+### 5. One-Off Scripts with PEP 723 (pixi >= 0.76)
 
 For a standalone analysis script with pinned dependencies — no project scaffold needed — use a PEP 723 inline-metadata block. Pixi reads it, resolves a cached environment, and runs the file:
 
@@ -121,11 +171,11 @@ The block itself (written by the commands above — do not hand-edit when a comm
 
 Conda deps/channels live in `tool.pixi` tables inside the block. `--script` also works on `remove`, `lock`, `list`, and `tree`.
 
-### 5. Agent-Safe, Non-Interactive Execution
+### 6. Agent-Safe, Non-Interactive Execution
 
 An AI agent driving `pixi` should avoid ANSI progress bars and nested subshells polluting captured output:
 
-- **Suppress progress bars**: set `PIXI_NO_PROGRESS=1` (or pass `--no-progress`) before running long installs/solves in a captured shell.
+- **Suppress progress bars**: progress bars are already off automatically when stderr isn't a terminal (captured shells). To force it, pass `--no-progress` or set `PIXI_NO_PROGRESS=true`. **Not `=1`**: pixi (0.81) parses it as a boolean and rejects `1`, and then *every* pixi command fails with `invalid value '1' for '--no-progress'`.
 
 - **Activate without spawning a subshell**: use `pixi shell-hook` to print the activation script and `eval` it in the current shell, rather than `pixi shell` (which opens an interactive nested shell an agent can't cleanly exit).
   
@@ -135,7 +185,7 @@ An AI agent driving `pixi` should avoid ANSI progress bars and nested subshells 
 
 - **Offline verification**: after a successful `pixi install --locked`, prove the cache fully covers the lockfile with `pixi install --locked --offline` (pixi >= 0.74; solves from the local package cache / `file://` channels only — pixi >= 0.75). Useful on air-gapped/HPC nodes and in CI. A failed offline solve means the cache is incomplete — re-run online; never loosen pins to "fix" it.
 
-### 6. Environment Verification & Stability
+### 7. Environment Verification & Stability
 
 To ensure an agent is working with a stable environment (especially before a long run):
 
@@ -148,6 +198,7 @@ To ensure an agent is working with a stable environment (especially before a lon
 - **Global vs Local**: Do not use `pixi global install` for project-specific tools. This breaks portability and reproducibility. (`pixi global` is a separate, machine-wide manifest for exposing standalone CLI tools — e.g. a linter you want on PATH everywhere — not for pipeline dependencies.)
 - **PyPI vs Conda**: Prefer the Conda version of a tool if available; only use `--pypi` if the tool is exclusively on PyPI.
 - **Unmanaged Pip Installs**: CRITICAL: Never run `pip install` directly inside a `pixi shell` or `pixi run` command. This creates "ghost dependencies" that are not recorded in `pixi.toml` and will disappear on the next environment sync, breaking reproducibility. Always use `pixi add --pypi`.
+- **Two projects / one `pixi.toml` per tool to dodge a clash**: duplicates the base env, splits the lockfile, and makes every caller track which manifest to use. Use a feature + environment (§4) inside the one manifest instead.
 - **Implicit Python Versions**: If a tool requires a specific Python version, specify it explicitly during `pixi add` (e.g., `pixi add python=3.10`).
 - **Deprecated manifest forms (pixi >= 0.71)**: do not emit `[system-requirements]` — use rich platform entries on `workspace.platforms` (e.g. `platforms = [{platform = "linux-64", cuda = "12.0"}]`); do not emit `conda-pypi-map = "file.json"` (since 0.71 a bare location is an **overlay** by default — use the explicit `{location = "...", mapping-mode = "replace"}` form); for git source deps use `--subdirectory` (not the old `--subdir`); `pixi build` no longer exists (merged into `pixi publish`).
 
@@ -157,6 +208,7 @@ To ensure an agent is working with a stable environment (especially before a lon
 - [ ] `pixi.lock` is present and consistent (`pixi install --locked` passes).
 - [ ] All required tools are executable via `pixi run <tool> --version`.
 - [ ] Required channels (`conda-forge`, `bioconda`) are listed under the `channels` section of `pixi.toml`.
+- [ ] If `[environments]` exists: every isolated env runs its tool (`pixi run -e <env> <tool> --version`).
 
 ## Docs-Corpus
 

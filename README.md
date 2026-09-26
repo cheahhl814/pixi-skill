@@ -1,6 +1,6 @@
 # pixi-skill
 
-[![Version](https://img.shields.io/badge/version-5-blue)](#-installation)
+[![Version](https://img.shields.io/badge/version-6-blue)](#-installation)
 [![Type](https://img.shields.io/badge/type-agent%20skill-blueviolet)](#-installation)
 [![Built with](https://img.shields.io/badge/built%20with-bioinfo--skill--creator-orange)](https://github.com/cheahhl814/bioinfo-skill-creator)
 
@@ -9,7 +9,7 @@ Manage project-specific, reproducible bioinformatics environments using pixi. Th
 **Repository**: https://github.com/cheahhl814/pixi-skill
 
 > [!NOTE]
-> Current version: **v3** (updated 2026-08-25).
+> Current version: **v6** (updated 2026-09-26).
 
 ## Contents
 
