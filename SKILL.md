@@ -1,8 +1,8 @@
 ---
 name: pixi-skill
 description: Manage project-specific, reproducible bioinformatics environments using pixi. This skill ensures that all tools (from Conda, Bioconda, and PyPI) are locked to specific versions, enabling one-click reproducibility across different machines and AI agents.
-version: 6
-updated: "2026-09-26"
+version: 7
+updated: "2026-10-28"
 triggers:
   - "set up environment"
   - "pixi install"
@@ -18,6 +18,8 @@ triggers:
   - "pixi run"
   - "dependency conflict"
   - "pixi feature environment"
+  - "exclude-newer"
+  - "pixi global install"
 ---
 
 # Skill: pixi-skill
@@ -192,24 +194,61 @@ To ensure an agent is working with a stable environment (especially before a lon
 - **Check Lock Integrity**: Run `pixi install --locked`. This aborts if the `pixi.lock` is not up-to-date with `pixi.toml`.
 - **Version Audit**: Run `pixi list` to verify that the installed version of a tool matches the expected scientific version.
 
+### 8. Pinning the Solve with `exclude-newer`
+
+A lockfile pins the *resolved* artifacts. `exclude-newer` pins the *solve itself* — it excludes every
+package published after a cutoff from consideration, so a re-solve on a future machine picks the same
+versions even when the lockfile is not carried along. It is a workspace-level key and applies to
+**every** environment in the manifest:
+
+```toml
+[workspace]
+exclude-newer = "2026-10-01T00:00:00Z"   # RFC 3339 timestamp
+# exclude-newer = "2026-10-01"           # YYYY-MM-DD (interpreted as the START of the next day, UTC)
+# exclude-newer = "7d"                   # relative duration
+```
+
+- **Use it when the environment must resolve identically on every machine** — a skill that ships a
+  `pixi.toml` to other users and agents is exactly that case. It is the reproducibility lever that
+  survives the lockfile being gitignored.
+- **Use it when `pixi.lock` is not committed.** A regenerable lockfile means a fresh solve on a new
+  machine; `exclude-newer` bounds that solve to a known-good window.
+- **It is a cutoff, not a pin.** It excludes newer packages, it does not require specific ones. Combine
+  it with explicit version constraints in `[dependencies]` for full control.
+- The **global** manifest supports `exclude-newer` too (pixi >= 0.82.0), so a machine-wide
+  `pixi global` install can be bounded the same way.
+- Refresh it deliberately: a cutoff that is too old eventually makes a needed package unresolvable.
+
+Deeper reference: `docs-corpus/pixi/features/reference_pixi_manifest.md` (the `exclude-newer` entry).
+
 ## Pitfalls
 
 - **Channel Conflict**: Adding channels in the wrong order or missing `conda-forge` can lead to solve failures in bioconda. Always prioritize `conda-forge` and `bioconda`.
-- **Global vs Local**: Do not use `pixi global install` for project-specific tools. This breaks portability and reproducibility. (`pixi global` is a separate, machine-wide manifest for exposing standalone CLI tools — e.g. a linter you want on PATH everywhere — not for pipeline dependencies.)
+- **Global vs Local**: Do not use `pixi global install` for project-specific tools. This breaks portability and reproducibility. (`pixi global` is a separate, machine-wide manifest for exposing standalone CLI tools — e.g. a linter you want on PATH everywhere — not for pipeline dependencies.) Its manifest lives in `~/.pixi/manifest.toml`, *outside* the project, so nothing about it travels with a repo. Concretely:
+  - Use `pixi global` for **machine-wide developer tooling that is not part of the project's deliverable** — a formatter, a linter, `nextflow` for a runner you invoke by hand.
+  - Use a **project manifest** for everything the project actually runs, so the tool set travels with the repo and is reviewable in a PR.
+  - **conda-forge is the only default channel for `pixi global`** (pixi 0.83.0 changelog #7285). A bioconda tool needs an explicit `--channel bioconda`; the channel list in `pixi.toml` does not apply.
+  - `pixi global` isolates each package in its own environment and exposes only the needed entry points (pipx-like), so it will not clobber a project env — but it also will not satisfy one.
+  - `pixi global install` (packages as arguments) and `pixi global add --environment <env>` (declared in the global manifest, then `pixi global sync`) are the two entry points; the second is the reproducible one because the manifest is a file you can review.
+- **No `pixi.lock` in the repo**: if the lockfile is not committed, `pixi install --locked` fails on a fresh clone with `Error: lock file not up-to-date with the workspace`, and a re-solve picks whatever is newest at that moment. Either commit `pixi.lock`, or bound the solve with `exclude-newer` (§8) — or both.
 - **PyPI vs Conda**: Prefer the Conda version of a tool if available; only use `--pypi` if the tool is exclusively on PyPI.
 - **Unmanaged Pip Installs**: CRITICAL: Never run `pip install` directly inside a `pixi shell` or `pixi run` command. This creates "ghost dependencies" that are not recorded in `pixi.toml` and will disappear on the next environment sync, breaking reproducibility. Always use `pixi add --pypi`.
 - **Two projects / one `pixi.toml` per tool to dodge a clash**: duplicates the base env, splits the lockfile, and makes every caller track which manifest to use. Use a feature + environment (§4) inside the one manifest instead.
 - **Implicit Python Versions**: If a tool requires a specific Python version, specify it explicitly during `pixi add` (e.g., `pixi add python=3.10`).
 - **Deprecated manifest forms (pixi >= 0.71)**: do not emit `[system-requirements]` — use rich platform entries on `workspace.platforms` (e.g. `platforms = [{platform = "linux-64", cuda = "12.0"}]`); do not emit `conda-pypi-map = "file.json"` (since 0.71 a bare location is an **overlay** by default — use the explicit `{location = "...", mapping-mode = "replace"}` form); for git source deps use `--subdirectory` (not the old `--subdir`); `pixi build` no longer exists (merged into `pixi publish`).
+- **`[project]` is the deprecated alias for `[workspace]`** — not the reverse (pixi 0.83.0 changelog #7086). A `[project]`-headed manifest still parses but emits `WARN The 'project' field is deprecated. Use 'workspace' instead.` on every command that reads it. Emit `[workspace]`. (`pixi init` writes `[workspace]`.)
 
 ## Verification
 
 - [ ] `pixi.toml` exists in the project root.
-- [ ] `pixi.lock` is present and consistent (`pixi install --locked` passes).
+- [ ] `pixi.lock` is present and consistent (`pixi install --locked` passes) — or, if the lockfile is deliberately not committed, `exclude-newer` bounds the solve (§8).
 - [ ] All required tools are executable via `pixi run <tool> --version`.
 - [ ] Required channels (`conda-forge`, `bioconda`) are listed under the `channels` section of `pixi.toml`.
 - [ ] If `[environments]` exists: every isolated env runs its tool (`pixi run -e <env> <tool> --version`).
+- [ ] The manifest header is `[workspace]`, not the deprecated `[project]`.
 
 ## Docs-Corpus
 
-`docs-corpus/pixi/` holds an offline CLI reference (`cli-reference.md`, captured from the installed `pixi --version` — regenerate with `./capture.sh` after any `pixi self-update`) plus feature deep-dives (multi-environment/features incl. inline `[environments.*.dependencies]`, task DAGs, manifest schema incl. rich platforms, `pyproject.toml` workspaces, `PIXI_*` env vars, **PEP 723 script environments**, **offline solves**). Check there before guessing a flag.
+`docs-corpus/pixi/` holds an offline CLI reference (`cli-reference.md`, captured from the installed `pixi --version` — regenerate with `./capture.sh` after any `pixi self-update`) plus feature deep-dives (multi-environment/features incl. inline `[environments.*.dependencies]`, task DAGs, manifest schema incl. rich platforms, `pyproject.toml` workspaces, `PIXI_*` env vars, PEP 723 script environments, offline solves, and the `pixi global` model). Check there before guessing a flag.
+
+The `features/*.md` files are the **upstream Markdown source at the release tag matching the installed binary** (`raw.githubusercontent.com/prefix-dev/pixi/<tag>/docs/...`), with the rendered pages kept in `_raw/*.html`. Refresh both the tag and `cli-reference.md` together after a `pixi self-update` — the subcommand list in `capture.sh` is derived from `pixi --help` at capture time, so it picks up new subcommands automatically.

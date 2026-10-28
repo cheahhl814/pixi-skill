@@ -1,21 +1,21 @@
 # pixi-skill
 
-[![Version](https://img.shields.io/badge/version-6-blue)](#-installation)
+[![Version](https://img.shields.io/badge/version-7-blue)](#-installation)
 [![Type](https://img.shields.io/badge/type-agent%20skill-blueviolet)](#-installation)
-[![Built with](https://img.shields.io/badge/built%20with-bioinfo--skill--creator-orange)](https://github.com/cheahhl814/bioinfo-skill-creator)
+[![Built with](https://img.shields.io/badge/built%20with-skill--forge-orange)](https://github.com/cheahhl814/skill-forge)
 
 Manage project-specific, reproducible bioinformatics environments using pixi. This skill ensures that all tools (from Conda, Bioconda, and PyPI) are locked to specific versions, enabling one-click reproducibility across different machines and AI agents.
 
 **Repository**: https://github.com/cheahhl814/pixi-skill
 
 > [!NOTE]
-> Current version: **v6** (updated 2026-09-26).
+> Current version: **v7** (updated 2026-10-28). Docs corpus refreshed against **pixi 0.83.0**.
 
 ## Contents
 
 - [Installation](#-installation)
 - [Usage](#-usage)
-- [Pipeline overview](#-pipeline-overview)
+- [What the skill covers](#-what-the-skill-covers)
 - [Tools](#-tools)
 - [Update check](#-update-check)
 - [Repository layout](#-repository-layout)
@@ -24,7 +24,9 @@ Manage project-specific, reproducible bioinformatics environments using pixi. Th
 
 ## 🚀 Installation
 
-This is an **agent skill**, not a user-facing library. The recommended install path is to let your AI agent import it.
+This is an **agent skill**, not a user-facing library. It is a single instruction file (`SKILL.md`) plus an
+offline documentation corpus — **it has no environment of its own**, so there is nothing to `pixi install`
+here. The one prerequisite is the `pixi` binary, which the skill then drives for *your* project.
 
 **Option A — give your agent this prompt (recommended):**
 
@@ -32,9 +34,9 @@ This is an **agent skill**, not a user-facing library. The recommended install p
 Install the pixi-skill skill from
 https://github.com/cheahhl814/pixi-skill —
 clone it into your agent's skills directory (the path your agent watches
-for skills) and run `pixi install` from that directory. Then read the
-skill's SKILL.md to understand its phases and the Input/Output contract
-for each. Confirm when the environment is ready.
+for skills), then read the skill's SKILL.md. Confirm that `pixi --version`
+works on this machine; if it does not, install it with
+`curl -fsSL https://pixi.sh/install.sh | sh`.
 ```
 
 **Option B — manual install:**
@@ -42,15 +44,19 @@ for each. Confirm when the environment is ready.
 ```bash
 git clone https://github.com/cheahhl814/pixi-skill.git
 cd pixi-skill
-pixi install
+pixi --version   # prerequisite: the pixi CLI itself
 ```
 
 > [!TIP]
-> `pixi install` resolves every pinned tool from `pixi.toml` (channels: conda-forge, bioconda) into an isolated `.pixi/` environment — no system-wide installs, no version conflicts with other skills.
+> The skill teaches you to build a *project* `pixi.toml` with a committed `pixi.lock`, a pinned
+> `exclude-newer` cutoff, and feature-scoped environments for tools that clash. It deliberately does
+> **not** use `pixi global` for project dependencies — see the *Global vs Local* pitfall in `SKILL.md`.
 
 ## 💡 Usage
 
-The skill is designed to be driven by an AI agent: the agent reads the master `SKILL.md`, detects the current phase from the filesystem state of your run directory, and routes to the right sub-skill.
+The skill is designed to be driven by an AI agent: the agent reads `SKILL.md` and applies the
+procedure that matches the task. There are no phase sub-skills and no `pixi run` tasks — the skill's
+sections are the procedure.
 
 ### Natural-language prompts that trigger the skill
 
@@ -60,51 +66,95 @@ pixi install
 conda environment
 manage dependencies
 pixi env
+install bioinformatics tools
+pixi feature environment
+exclude-newer
 ```
 
-### Manual phase execution
+### Applying the procedure yourself
 
-If you prefer to drive the phases yourself (or want to re-run a single phase):
+The sections of `SKILL.md`, in order of use:
 
 ```bash
-# Set your run directory (all phase artifacts land here)
-RUN_DIR=/path/to/run-dir
+# §1 Project initialization — one manifest, one lockfile
+pixi init
+pixi workspace channel add conda-forge
+pixi workspace channel add bioconda
 
-pixi run preflight   # Phase 1 — validate inputs, write preflight.md + params.json
-pixi run run         # Phase 2 — execute the workflow (after preflight ≥ GO)
-pixi run qc          # Phase 3 — build the final report (after run completes)
-pixi run debug       # On failure — interpret stderr via the signature library
-pixi run battle-test # Verify the skill's structural integrity
+# §2 Dependency addition — conda/bioconda first, --pypi only for PyPI-only tools
+pixi add fastp seqkit
+pixi add --pypi some-pypi-only-tool
+
+# §3 Task aliases — `pixi run <task>` instead of long shell strings
+pixi task add trim "fastp -i in.fq.gz -o out.fq.gz"
+pixi task add align "bwa mem ref.fa out.fq.gz > out.sam" --depends-on trim
+pixi run align
+
+# §4 Clashing tools — feature + environment in the SAME manifest, not a second project
+pixi add --feature checkm checkm-genome "setuptools<81"
+pixi workspace environment add checkm --feature checkm --no-default-feature
+pixi run -e checkm checkm-qc
+
+# §5 One-off scripts — PEP 723 inline metadata, no project scaffold
+pixi run --script analyze.py
+
+# §6 Agent-safe execution — no ANSI progress bars, no nested subshell
+eval "$(pixi shell-hook)"
+
+# §7 Verification
+pixi install --locked
+pixi list
+
+# §8 Bounding the solve — survives a lockfile that is not carried along
+#    (add `exclude-newer = "2026-10-01"` to the [workspace] table)
 ```
 
 > [!IMPORTANT]
-> Each phase has an explicit **Inputs/Outputs contract** at the top of its sub-skill `SKILL.md`. If the upstream artifact is missing (e.g. you run `run` before `preflight` passed), the sub-skill refuses to proceed and tells you which phase to run first. Phases are gated on purpose — don't skip them.
+> `pixi run` picks the environment for a task when only one environment has it, but opens an
+> **interactive picker** when the task is ambiguous — which hangs a captured shell. Always pass
+> `-e <env>` explicitly from an agent.
 
-## 🔬 Pipeline overview
+## 🧭 What the skill covers
 
-The analysis follows a phased evidence chain. Each phase consumes the artifacts of the previous phase and gates progression with a Go/No-Go check.
-
-| #   | Phase | Goal | Sub-skill | Artifact produced |
-|:--- |:----- |:---- |:--------- |:----------------- |
-
-> [!TIP]
-> Read each sub-skill's `SKILL.md` for the full procedure, its ask-user stop points, and its signature library (stderr pattern → cause → fix).
+| Section | Question it answers |
+|:--------|:--------------------|
+| §1 Project initialization | How do I start a project-scoped pixi workspace with the right channels? |
+| §2 Dependency addition | Conda/Bioconda vs `--pypi` vs git-sourced tools? |
+| §3 Pipeline orchestration | How do I turn long shell strings into named, runnable tasks? |
+| §4 Multiple environments | Two tools won't co-solve — how do I split them without duplicating the env? |
+| §5 One-off scripts | A standalone analysis script with pinned deps, without a project scaffold? |
+| §6 Agent-safe execution | How do I run pixi from an agent without ANSI bars or a nested interactive shell? |
+| §7 Verification | How do I prove the environment matches the lockfile? |
+| §8 `exclude-newer` | How do I keep a re-solve reproducible when the lockfile isn't carried along? |
+| Pitfalls | The 10 mistakes that actually bite: channel order, `pip install` inside a pixi shell, a `pixi.toml` per tool, implicit Python versions, deprecated manifest forms, and the deprecated `[project]` header. |
 
 ## 🧰 Tools
 
-All tools are resolved from conda-forge/bioconda via the pinned `pixi.toml`.
+The skill drives the `pixi` CLI and resolves packages from **conda-forge** and **bioconda**.
 
-| Tool | Version | Role |
-|:---- |:------- |:---- |
+| Tool | Role |
+|:---- |:-----|
+| `pixi` (>= 0.71) | The package/environment manager this skill operates. Corpus verified against **0.83.0**. |
+| conda-forge | Default channel for general tooling. |
+| bioconda | The bioinformatics channel — aligners, assemblers, QC tools. |
 
-Tool usage is grounded in the offline `docs-corpus/` snapshots (version-matched `--help`/`man` captures, upstream repo docs, and web docs as fallback) — the agent reads these instead of guessing flags.
+Flag and schema usage is grounded in the offline `docs-corpus/` snapshots — the agent reads these
+instead of guessing:
+
+- `docs-corpus/pixi/cli-reference.md` — **live capture** of `pixi --help` and every subcommand's
+  `--help` against the installed binary (authoritative for CLI flags).
+- `docs-corpus/pixi/features/` — upstream documentation source at the release tag matching the
+  installed binary: manifest schema, multi-environment tutorial, task DAGs, `pyproject.toml`
+  workspaces, `PIXI_*` env vars, and the `pixi global` model.
+- `docs-corpus/pixi/_raw/` — the rendered pages, for cases where the Markdown source alone is ambiguous.
 
 ## 🔄 Update check
 
-Every skill built with [bioinfo-skill-creator](https://github.com/cheahhl814/bioinfo-skill-creator) ships a self-update check that compares the deployed git SHA against this upstream repo via `git fetch` — no GitHub API call, no extra dependencies.
+This skill ships a self-update check that compares the deployed git SHA against this upstream repo via
+`git fetch` — no GitHub API call, no extra dependencies.
 
 ```bash
-pixi run update-check
+python3 bin/skill-update-check.py
 ```
 
 | Verdict       | Exit | Meaning                                                      |
@@ -119,30 +169,40 @@ pixi run update-check
 
 ```text
 pixi-skill/
-├── SKILL.md                 # Master orchestrator (router — start here)
+├── SKILL.md                 # The skill — the procedure, pitfalls, verification checklist
 ├── README.md                # This file
-├── pixi.toml                # Pinned tool environment (pixi install)
-├── docs-corpus/             # Offline snapshots of upstream tool docs
+├── params.json              # skill-forge render input (name, version, triggers, repo)
 ├── bin/
-│   └── skill-update-check.py  # Self-update check (pixi run update-check)
-└── bin/
-    └── scaffold-render.py     # Reproducibility — re-render the skill from params.json
+│   └── skill-update-check.py  # Self-update check (stdlib only)
+└── docs-corpus/
+    └── pixi/
+        ├── README.md            # What each file is, how to refresh it
+        ├── capture.sh           # Regenerates cli-reference.md from the installed pixi
+        ├── cli-reference.md     # Live --help capture (all subcommands, incl. pixi global)
+        ├── features/            # Upstream docs source @ the matching release tag
+        └── _raw/                # The same pages as rendered HTML
 ```
 
 ## 🔒 Hard guarantees
 
-- **Filesystem evidence chain** — every phase emits the artifact the next phase consumes; the boundary between phases is the filesystem, not agent memory.
-- **Docs-grounded tool usage** — tool flags come from `docs-corpus/`, never from the agent's memory.
-- **Explicit stop points** — ambiguous decisions are surfaced to you as *Evidence + Recommend + Options*, not auto-picked.
-- **Reproducible environments** — every tool is pinned in `pixi.toml` and resolved via pixi.
+- **One manifest, one lockfile** — a clashing tool gets a *feature + environment* inside the same
+  `pixi.toml`, never a second project and never a `pixi.toml` per tool.
+- **Project scope, not global scope** — `pixi global` is reserved for machine-wide developer tooling
+  that is not part of a project's deliverable. A project's tool inventory is never global.
+- **Docs-grounded flag usage** — every `pixi` flag and manifest key comes from `docs-corpus/`, never
+  from the agent's memory, and the corpus is pinned to the installed binary version.
+- **Explicit pitfalls** — the failure modes that actually bite (channel order, `pip install` inside a
+  pixi shell, implicit Python versions, the deprecated `[project]` header) are named up front.
 
 ## 🚀 Nextflow runner
 
-This skill does not currently ship a Nextflow runner. For cohort/HPC execution, wrap the `pixi run` tasks in a workflow scheduler of your choice.
+This skill does not ship a Nextflow runner. For cohort/HPC execution, wrap the `pixi run` tasks of
+*your* project in a workflow scheduler of your choice.
 
 ## Provenance
 
-Built with the [bioinfo-skill-creator](https://github.com/cheahhl814/bioinfo-skill-creator) meta-skill (v1.1.0), following the AiX-BIO skill convention (preflight → build → debug → battle-test evidence chain). Pattern adopted from:
+Built with the [skill-forge](https://github.com/cheahhl814/skill-forge) meta-skill, following the
+AiX-BIO skill convention. Pattern adopted from:
 
 - **BettaMt-agents** — https://github.com/cheahhl814/BettaMt-agents
 - **bacterial-genome-analysis** — https://github.com/cheahhl814/bacterial-genome-analysis
