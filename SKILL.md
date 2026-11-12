@@ -20,6 +20,7 @@ triggers:
   - "pixi feature environment"
   - "exclude-newer"
   - "pixi global install"
+disable-model-invocation: true
 ---
 
 # Skill: pixi-skill
